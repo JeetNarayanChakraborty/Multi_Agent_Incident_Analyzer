@@ -3,30 +3,31 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
 from langchain_core.messages import SystemMessage
-from src.tools import search_logs, query_database, search_git_commits, dispatch_incident_report
-
-
+from src.tools import (
+    search_logs,
+    query_database,
+    search_git_commits,
+    dispatch_incident_report,
+)
 
 load_dotenv()
 
 # Initialize the Google Generative AI model
 # Temerature should be 0, as only deterministic answers are expected from the model
 llm = ChatGoogleGenerativeAI(
-       model = "gemini-1.5-flash",
-       temperature = 0,
-       api_key = os.getenv("GOOGLE_API_KEY")
+    model="gemini-1.5-flash", temperature=0, api_key=os.getenv("GOOGLE_API_KEY")
 )
 
 # Collect the tools into a list to be used by the agent
 tool_available = [
-     search_logs,
-     query_database,
-     search_git_commits,
-     dispatch_incident_report
+    search_logs,
+    query_database,
+    search_git_commits,
+    dispatch_incident_report,
 ]
 
 # Define the System Prompt
-# This prompt is used to instruct the agent to perform scatter - gather 
+# This prompt is used to instruct the agent to perform scatter - gather
 # as well as looping through the tools to find the root cause of the incident
 system_prompt = """
 You are an Autonomous Incident Response Agent responsible for dynamically triaging production latency spikes.
@@ -69,29 +70,26 @@ CRITICAL RULES:
 
 # LangGraph React Agent, automatically builds the state machine loop between LLM and tools
 agent_executor = create_agent(
-     model = llm,
-     tools = tool_available,
-     state_modifier = system_prompt
+    model=llm, tools=tool_available, state_modifier=system_prompt
 )
 
 
 def run_triage(incident_message: str):
     """
-    Entry point to trigger the agent. 
-    A recursion_limit of 15 is set to act as the circuit breaker. 
-    Since each LLM thought and Tool execution counts as a step, 15 steps safely 
+    Entry point to trigger the agent.
+    A recursion_limit of 15 is set to act as the circuit breaker.
+    Since each LLM thought and Tool execution counts as a step, 15 steps safely
     covers the maximum 5 dynamic reasoning cycles defined in the system prompt.
     """
     print(f"--- INITIATING INCIDENT TRIAGE ---")
     print(f"Alert Received: {incident_message}\n")
-    
+
     config = {"recursion_limit": 15}
-    
+
     # Execute the graph
     try:
         for chunk in agent_executor.stream(
-            {"messages": [("user", incident_message)]}, 
-            config=config
+            {"messages": [("user", incident_message)]}, config=config
         ):
             # Print the agent's internal reasoning and tool calls as they happen
             for key, value in chunk.items():
@@ -99,11 +97,13 @@ def run_triage(incident_message: str):
                     if value["messages"][0].tool_calls:
                         tool_calls = value["messages"][0].tool_calls
                         for tc in tool_calls:
-                            print(f"[Agent Decision] -> Dynamically Calling Tool: '{tc['name']}' with args: {tc['args']}")
+                            print(
+                                f"[Agent Decision] -> Dynamically Calling Tool: '{tc['name']}' with args: {tc['args']}"
+                            )
                     else:
                         print(f"[Agent Reasoning] -> {value['messages'][0].content}")
                 elif key == "tools":
                     print(f"[Tool Execution] -> Observation gathered.\n")
-                    
+
     except Exception as e:
         print(f"\n[CIRCUIT BREAKER TRIGGERED] Investigation halted: {str(e)}")
