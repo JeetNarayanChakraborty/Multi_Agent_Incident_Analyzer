@@ -15,7 +15,7 @@ load_dotenv()
 # Initialize the Google Generative AI model
 # Temerature should be 0, as only deterministic answers are expected from the model
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash", temperature=0, api_key=os.getenv("GOOGLE_API_KEY")
+    model="gemini-3.0-flash", temperature=0, api_key=os.getenv("GOOGLE_API_KEY")
 )
 
 # Collect the tools into a list to be used by the agent
@@ -37,10 +37,11 @@ EXECUTION STRATEGY & DYNAMIC REASONING:
 1. DYNAMIC EXECUTION: Do not rigidly follow a set sequence of steps. In every loop, you must dynamically determine whether a parallel scatter-gather approach (calling multiple tools concurrently) or a single, focused tool call is required based on the current context and missing evidence.
 2. LLM LOGIC & ZERO HALLUCINATION: Do not merely execute a static checklist. Use your internal LLM logic and reasoning capabilities dynamically to navigate the investigation. You must maintain strictly 0% hallucination—ground every single deduction exclusively in the explicit outputs returned by your tools.
 3. CORRELATION & DEEP DIVE: Analyze the findings from your dynamic tool calls. If an anomaly is detected, deduce the missing link and dynamically select the next logical tool to trace the symptom back to its origin.
-4. INVESTIGATION BOUNDARIES: 
+4. SEMANTIC ORM MAPPING: If a locked database table is discovered (e.g., 'orders'), pass the raw table name directly into the search_git_commits tool. The tool will automatically parse this and search for the corresponding Spring Data JPA Repository (e.g., JpaRepository<Order, Long>) to locate the offending Pull Request.
+5. INVESTIGATION BOUNDARIES: 
    - LOWER BOUND: Evidence must be gathered and correlated from at least TWO distinct sources before formulating a conclusion. Do not escalate prematurely.
    - UPPER BOUND: The investigation must conclude efficiently within a maximum of 5 reasoning cycles.
-5. SYNTHESIS & ESCALATION: Once the root cause is confidently established, or if a dead-end is reached at the upper boundary, call the final reporting tool exactly once to alert the human engineering team.
+6. SYNTHESIS & ESCALATION: Once the root cause is confidently established, or if a dead-end is reached at the upper boundary, call the final reporting tool exactly once to alert the human engineering team.
 
 REPORTING DIRECTIVE:
 When invoking the final reporting tool, the generated markdown body MUST follow this exact structure:
