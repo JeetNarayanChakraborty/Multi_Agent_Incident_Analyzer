@@ -1,109 +1,130 @@
-import os
-from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import create_agent
+import operator
+from typing import Annotated, Sequence, TypedDict, Literal
+from pydantic import BaseModel, Field
+from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.graph import StateGraph, START, END
+import database_agent, git_agent, log_agent
 
-load_dotenv()
-from tools import (
-    search_logs,
-    query_database,
-    search_git_commits,
-    dispatch_incident_report,
-)
 
-# Initialize the Google Generative AI model
-# Temerature should be 0, as only deterministic answers are expected from the model
-llm = ChatGoogleGenerativeAI(
-    model="gemini-3.7-flash", temperature=0, api_key=os.getenv("GOOGLE_API_KEY")
-)
+# Defines the shared memory accessible by all agents
+class AgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], operator.add]
+    next_worker: str
 
-# Collect the tools into a list to be used by the agent
-tool_available = [
-    search_logs,
-    query_database,
-    search_git_commits,
-    dispatch_incident_report,
-]
 
-# Define the System Prompt
-# This prompt is used to instruct the agent to perform scatter - gather
-# as well as looping through the tools to find the root cause of the incident
-system_prompt = """
-You are an Autonomous Incident Response Agent responsible for dynamically triaging production latency spikes.
-Your objective is to investigate the issue, correlate cross-platform evidence, determine the root cause, and dispatch a report.
+# Enforces the LLM to output a precise routing decision
+class Route(BaseModel):
+    next_worker: Literal[
+        "telemetry_agent", "database_agent", "code_agent", "FINISH"
+    ] = Field(
+        description="The next agent to route the investigation to. Select 'FINISH' ONLY when the incident report has been dispatched to GitHub."
+    )
 
-EXECUTION STRATEGY & DYNAMIC REASONING:
-1. DYNAMIC EXECUTION: Do not rigidly follow a set sequence of steps. In every loop, you must dynamically determine whether a parallel scatter-gather approach (calling multiple tools concurrently) or a single, focused tool call is required based on the current context and missing evidence.
-2. LLM LOGIC & ZERO HALLUCINATION: Do not merely execute a static checklist. Use your internal LLM logic and reasoning capabilities dynamically to navigate the investigation. You must maintain strictly 0% hallucination—ground every single deduction exclusively in the explicit outputs returned by your tools.
-3. CORRELATION & DEEP DIVE: Analyze the findings from your dynamic tool calls. If an anomaly is detected, deduce the missing link and dynamically select the next logical tool to trace the symptom back to its origin.
-4. SEMANTIC ORM MAPPING: If a locked database table is discovered (e.g., 'orders'), pass the raw table name directly into the search_git_commits tool. The tool will automatically parse this and search for the corresponding Spring Data JPA Repository (e.g., JpaRepository<Order, Long>) to locate the offending Pull Request.
-5. INVESTIGATION BOUNDARIES: 
-   - LOWER BOUND: Evidence must be gathered and correlated from at least TWO distinct sources before formulating a conclusion. Do not escalate prematurely.
-   - UPPER BOUND: The investigation must conclude efficiently within a maximum of 5 reasoning cycles.
-6. SYNTHESIS & ESCALATION: Once the root cause is confidently established, or if a dead-end is reached at the upper boundary, call the final reporting tool exactly once to alert the human engineering team.
 
-REPORTING DIRECTIVE:
-When invoking the final reporting tool, the generated markdown body MUST follow this exact structure:
+supervisor_prompt = """
+You are the System Context Supervisor, orchestrating a distributed multi-agent incident response framework.
+Your objective is to evaluate the global state of the investigation, deduce missing critical-path evidence, and autonomously route execution to the appropriate domain expert.
 
-# 🚨 [INCIDENT RCA] High Latency on [Service Name]
+DOMAIN EXPERTS (WORKERS):
+- 'telemetry_agent': Activate to retrieve and synthesize raw application logs. This is typically the entry point to isolate the symptom (e.g., connection timeouts, exceptions).
+- 'database_agent': Activate to diagnose data-tier bottlenecks, including PostgreSQL transaction locks, unindexed queries, or connection pool exhaustion.
+- 'code_agent': Activate to perform codebase forensics via semantic ORM mapping and to dispatch the final Root Cause Analysis (RCA) report.
 
-## 1. Incident Summary
-* **Impacted Service:** [Service Name]
-* **Trigger Alert:** [Alert Details]
-* **Root Cause:** [Dynamic summary of the verified issue and its origin]
-
-## 2. Investigation Timeline & Evidence Chain
-[Include a Markdown table correlating the distinct sources and the explicit observations found]
-
-## 3. Suggested Immediate Mitigation (Restore Service)
-Execute the following containment actions immediately:
-1. **Terminate the Blocking Process/Query:**
-   [Provide the exact mitigation command, if applicable]
-2. **Roll Back or Revert:**
-   [Provide the exact rollback target, if applicable]
-
-CRITICAL RULES:
-- Maintain 0% hallucination. Never invent telemetry, logs, table names, or commit hashes. 
-- If the root cause cannot be fully determined within the iteration limit, generate the report using the partial evidence gathered so far.
-- Once the final incident report is dispatched, the investigation is complete. Do not execute any further actions.
+DYNAMIC ROUTING & STATE EVALUATION RULES:
+1. CONTEXTUAL STRATEGY: Analyze the conversation history. Do not rigidly cycle through agents. Route based on the specific technical evidence missing from the current state.
+2. BLOCKING CONDITIONS: If a worker returns an error or insufficient data, do not halt. Re-evaluate the state and route to an alternative agent to gather cross-sectional evidence.
+3. DEPENDENCY MANAGEMENT: Ensure the 'database_agent' or 'code_agent' is only called when there is sufficient upstream context (e.g., a specific service name or locked table name) to formulate a targeted query.
+4. ZERO HALLUCINATION & NO CHAT: Do not output conversational text, ask questions, or invent evidence. Output only the exact routing string required.
+5. COMPLETION CRITERIA: The investigation is only complete when a formalized RCA report has been successfully dispatched to the repository. Once the 'code_agent' explicitly confirms the GitHub issue creation, output exactly 'FINISH'.
 """
 
-# LangGraph React Agent, automatically builds the state machine loop between LLM and tools
-agent_executor = create_agent(
-    model=llm, tools=tool_available, system_prompt=system_prompt
-)
+
+# Defines the supervisor node that evaluates the state and outputs the next routing decision
+def supervisor_node(state: AgentState):
+    """Evaluates the state and outputs the next routing decision."""
+    from langchain_core.messages import SystemMessage
+
+    messages = state["messages"]
+    # Binds the Pydantic schema to the LLM
+    router_llm = llm.with_structured_output(Route)
+
+    # Prepends the supervisor instructions to the full context history
+    prompt = [SystemMessage(content=supervisor_prompt)] + messages
+    decision = router_llm.invoke(prompt)
+
+    return {"next_worker": decision.next_worker}
 
 
-def run_triage(incident_message: str):
-    """
-    Entry point to trigger the agent.
-    A recursion_limit of 15 is set to act as the circuit breaker.
-    Since each LLM thought and Tool execution counts as a step, 15 steps safely
-    covers the maximum 5 dynamic reasoning cycles defined in the system prompt.
-    """
-    print(f"--- INITIATING INCIDENT TRIAGE ---")
-    print(f"Alert Received: {incident_message}\n")
+# Executes the telemetry agent and returns the final output to a global memory
+def telemetry_node(state: AgentState):
+    """Executes the telemetry agent and appends the result to global memory."""
+    # Assuming 'telemetry_agent' is initialized via create_agent
+    result = log_agent.invoke({"messages": state["messages"]})
+    final_output = result["messages"][-1].content
+    return {
+        "messages": [
+            HumanMessage(
+                content=f"Telemetry Findings: {final_output}", name="telemetry_agent"
+            )
+        ]
+    }
 
-    config = {"recursion_limit": 15}
 
-    # Execute the graph
-    try:
-        for chunk in agent_executor.stream(
-            {"messages": [("user", incident_message)]}, config=config
-        ):
-            # Print the agent's internal reasoning and tool calls as they happen
-            for key, value in chunk.items():
-                if key == "agent":
-                    if value["messages"][0].tool_calls:
-                        tool_calls = value["messages"][0].tool_calls
-                        for tc in tool_calls:
-                            print(
-                                f"[Agent Decision] -> Dynamically Calling Tool: '{tc['name']}' with args: {tc['args']}"
-                            )
-                    else:
-                        print(f"[Agent Reasoning] -> {value['messages'][0].content}")
-                elif key == "tools":
-                    print(f"[Tool Execution] -> Observation gathered.\n")
+# Executes the database agent and returns the final output to a global memory
+def database_node(state: AgentState):
+    """Executes the database agent and appends the result to global memory."""
+    result = database_agent.invoke({"messages": state["messages"]})
+    final_output = result["messages"][-1].content
+    return {
+        "messages": [
+            HumanMessage(
+                content=f"Database Findings: {final_output}", name="database_agent"
+            )
+        ]
+    }
 
-    except Exception as e:
-        print(f"\n[CIRCUIT BREAKER TRIGGERED] Investigation halted: {str(e)}")
+
+# Executes the code agent and returns the final output to a global memory
+def code_node(state: AgentState):
+    """Executes the code agent and appends the result to global memory."""
+    result = git_agent.invoke({"messages": state["messages"]})
+    final_output = result["messages"][-1].content
+    return {
+        "messages": [
+            HumanMessage(
+                content=f"Code/Report Findings: {final_output}", name="code_agent"
+            )
+        ]
+    }
+
+
+# Initializes the state machine with nodes and edges
+workflow = StateGraph(AgentState)
+
+# Add the independent nodes
+workflow.add_node("supervisor", supervisor_node)
+workflow.add_node("telemetry_agent", telemetry_node)
+workflow.add_node("database_agent", database_node)
+workflow.add_node("code_agent", code_node)
+
+
+# Define the logic for dynamic routing
+def route_next(state: AgentState):
+    if state["next_worker"] == "FINISH":
+        return END
+    return state["next_worker"]
+
+
+# Connect the edges
+workflow.add_conditional_edges("Supervisor", route_next)
+
+# Ensure workers always report back to the Supervisor
+workflow.add_edge("telemetry_agent", "Supervisor")
+workflow.add_edge("database_agent", "Supervisor")
+workflow.add_edge("code_agent", "Supervisor")
+
+# Set the starting point of the workflow
+workflow.set_start(START, "Supervisor")
+
+# Compile the multi-agent network
+MAF = workflow.compile()
