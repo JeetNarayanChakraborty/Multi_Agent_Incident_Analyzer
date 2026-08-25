@@ -2,20 +2,19 @@ import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
-from langchain_core.messages import SystemMessage
-from src.tools import (
+
+load_dotenv()
+from tools import (
     search_logs,
     query_database,
     search_git_commits,
     dispatch_incident_report,
 )
 
-load_dotenv()
-
 # Initialize the Google Generative AI model
 # Temerature should be 0, as only deterministic answers are expected from the model
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.0-flash", temperature=0, api_key=os.getenv("GOOGLE_API_KEY")
+    model="gemini-3.7-flash", temperature=0, api_key=os.getenv("GOOGLE_API_KEY")
 )
 
 # Collect the tools into a list to be used by the agent
@@ -71,7 +70,7 @@ CRITICAL RULES:
 
 # LangGraph React Agent, automatically builds the state machine loop between LLM and tools
 agent_executor = create_agent(
-    model=llm, tools=tool_available, state_modifier=system_prompt
+    model=llm, tools=tool_available, system_prompt=system_prompt
 )
 
 

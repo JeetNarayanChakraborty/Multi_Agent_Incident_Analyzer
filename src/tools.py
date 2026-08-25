@@ -3,9 +3,9 @@ import re
 import requests
 import psycopg2
 from dotenv import load_dotenv
-from langchain_core.tools import tool
 
 load_dotenv()
+from langchain_core.tools import tool
 
 
 @tool
@@ -31,7 +31,7 @@ def search_logs(service_name: str) -> str:
 
     try:
         response = requests.post(
-            "https://cloud.axiom.co/api/v1/datasets/query",
+            "https://api.axiom.co/v1/datasets/_apl?format=legacy",
             headers=headers,
             json={"apl": query},
         )
