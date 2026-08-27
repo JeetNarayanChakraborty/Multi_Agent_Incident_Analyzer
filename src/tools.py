@@ -96,39 +96,83 @@ def query_database(query: str) -> str:
 
 
 @tool
-def search_git_commits(table_name: str) -> str:
+def search_git_commits(table_name: str, target_repo: str) -> str:
     """
-    This tool searches the git commit history for a given search string (like a SQL query).
-    It is used to find recent changes that may have introduced errors or exceptions.
+    Searches the git commit history dynamically.
+    Args:
+        table_name: The database table implicated in the locks (e.g., 'orders').
+        target_repo: The full GitHub repository string to search (e.g., 'JeetNarayanChakraborty/Multi_Agent_Incident_Analyzer_OrderService').
     """
+
+    import time
 
     github_token = os.getenv("GITHUB_TOKEN")
-    repo = os.getenv("GITHUB_REPO")
 
-    if not github_token or not repo:
-        return "GitHub token or repository is not set in environment variables."
+    if not github_token:
+        return "GitHub token is not set in environment variables."
 
     headers = {
         "Authorization": f"Bearer {github_token}",
         "Accept": "application/vnd.github.v3+json",
     }
 
-    # Converts snake_case table names (e.g. 'order_items') to PascalCase ('OrderItems')
+    # Broaden the search to catch both standard JPA generics and @Table definitions
     entity_guess = "".join(word.capitalize() for word in re.split(r"[_|-]", table_name))
-    jpa_search_query = f'"extends JpaRepository<{entity_guess}"'
 
     try:
-        url = f"https://api.github.com/search/code?q=repo:{repo}+{jpa_search_query}+extension:java"
+        # STEP 1: Locate the repository file
+        url_search = "https://api.github.com/search/code"
+        # Query looks for either the entity name or the raw table name in Java files
+        safe_query = f"repo:{target_repo} {entity_guess} OR {table_name} extension:java"
 
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        github_data = response.json()
+        time.sleep(2)  # Cooling period
+        response_search = requests.get(
+            url_search, headers=headers, params={"q": safe_query}
+        )
+        response_search.raise_for_status()
+        search_data = response_search.json()
 
-        if github_data.get("total_count", 0) == 0:
+        if search_data.get("total_count", 0) == 0:
             return "No commits found matching the search string."
 
-        file_info = github_data["items"][0]
-        return f"Found Spring Data Repository in: {file_info['path']}. PR #4052 recently modified this repository query method."
+        file_path = search_data["items"][0]["path"]
+
+        # STEP 2: Retrieve the latest commit that modified this specific file
+        url_commits = f"https://api.github.com/repos/{target_repo}/commits"
+
+        time.sleep(2)  # Cooling period
+        response_commits = requests.get(
+            url_commits, headers=headers, params={"path": file_path, "per_page": 1}
+        )
+        response_commits.raise_for_status()
+        commit_data = response_commits.json()
+
+        if not commit_data:
+            return f"Found file in {file_path}, but could not retrieve commit history."
+
+        # Extract the detailed commit metadata
+        latest_commit_sha = commit_data[0]["sha"]
+        commit_message = commit_data[0]["commit"]["message"]
+        author_name = commit_data[0]["commit"]["author"]["name"]
+
+        # STEP 3: Retrieve the pull request associated with the commit
+        url_pulls = f"https://api.github.com/repos/{target_repo}/commits/{latest_commit_sha}/pulls"
+
+        time.sleep(2)  # Cooling period
+        response_pulls = requests.get(url_pulls, headers=headers)
+        response_pulls.raise_for_status()
+        pulls_data = response_pulls.json()
+
+        pr_info = "No associated PR found."
+        if pulls_data:
+            pr_info = f"Introduced via PR #{pulls_data[0]['number']}."
+
+        return (
+            f"Found Spring Data Repository in: {file_path}.\n"
+            f"Latest Modification: Commit {latest_commit_sha[:7]} by {author_name}.\n"
+            f"Commit Message: '{commit_message}'.\n"
+            f"{pr_info}"
+        )
 
     except Exception as e:
         return f"Error searching git commits: {str(e)}"
