@@ -1,9 +1,18 @@
+import os
 import operator
 from typing import Annotated, Sequence, TypedDict, Literal
 from pydantic import BaseModel, Field
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+load_dotenv()
 import database_agent, git_agent, log_agent
+
+llm = ChatGoogleGenerativeAI(
+    model="gemini-3.7-flash", temperature=0, api_key=os.getenv("GOOGLE_API_KEY")
+)
 
 
 # Defines the shared memory accessible by all agents
@@ -59,7 +68,7 @@ def supervisor_node(state: AgentState):
 def telemetry_node(state: AgentState):
     """Executes the telemetry agent and appends the result to global memory."""
     # Assuming 'telemetry_agent' is initialized via create_agent
-    result = log_agent.invoke({"messages": state["messages"]})
+    result = log_agent.telemetry_agent_executor.invoke({"messages": state["messages"]})
     final_output = result["messages"][-1].content
     return {
         "messages": [
@@ -73,7 +82,9 @@ def telemetry_node(state: AgentState):
 # Executes the database agent and returns the final output to a global memory
 def database_node(state: AgentState):
     """Executes the database agent and appends the result to global memory."""
-    result = database_agent.invoke({"messages": state["messages"]})
+    result = database_agent.database_agent_executor.invoke(
+        {"messages": state["messages"]}
+    )
     final_output = result["messages"][-1].content
     return {
         "messages": [
@@ -87,7 +98,7 @@ def database_node(state: AgentState):
 # Executes the code agent and returns the final output to a global memory
 def code_node(state: AgentState):
     """Executes the code agent and appends the result to global memory."""
-    result = git_agent.invoke({"messages": state["messages"]})
+    result = git_agent.code_agent_executor.invoke({"messages": state["messages"]})
     final_output = result["messages"][-1].content
     return {
         "messages": [
@@ -116,15 +127,43 @@ def route_next(state: AgentState):
 
 
 # Connect the edges
-workflow.add_conditional_edges("Supervisor", route_next)
+workflow.add_conditional_edges("supervisor", route_next)
 
 # Ensure workers always report back to the Supervisor
-workflow.add_edge("telemetry_agent", "Supervisor")
-workflow.add_edge("database_agent", "Supervisor")
-workflow.add_edge("code_agent", "Supervisor")
+workflow.add_edge("telemetry_agent", "supervisor")
+workflow.add_edge("database_agent", "supervisor")
+workflow.add_edge("code_agent", "supervisor")
 
 # Set the starting point of the workflow
-workflow.set_start(START, "Supervisor")
+workflow.add_edge(START, "supervisor")
 
 # Compile the multi-agent network
 MAF = workflow.compile()
+
+
+def run_triage(incident_message: str):
+    """Entry point for the Multi-Agent System."""
+    from langchain_core.messages import HumanMessage
+
+    print(f"--- INITIATING MULTI-AGENT INCIDENT TRIAGE ---")
+    print(f"Alert Received: {incident_message}\n")
+
+    initial_state = {"messages": [HumanMessage(content=incident_message)]}
+    config = {"recursion_limit": 20}
+
+    try:
+        # Stream the execution to observe the handoffs
+        for event in MAF.stream(initial_state, config=config):
+            for node_name, state_update in event.items():
+                print(f"\n[Node Activated] -> {node_name}")
+                if "next_worker" in state_update:
+                    print(
+                        f"[Routing Decision] -> Delegating to {state_update['next_worker']}"
+                    )
+                if "messages" in state_update:
+                    print(f"[Worker Output] -> {state_update['messages'][-1].content}")
+
+        print("\n=== INVESTIGATION COMPLETE ===")
+
+    except Exception as e:
+        print(f"\n[SYSTEM HALTED] Error during execution: {str(e)}")
