@@ -78,7 +78,7 @@ def query_database(query: str) -> str:
         return "NeonDB URL is not set in environment variables."
 
     try:
-        conn = psycopg2.connect(db_url, options="-c default_transaction_read_only=on")
+        conn = psycopg2.connect(db_url)
         cursor = conn.cursor()
 
         cursor.execute(query)
