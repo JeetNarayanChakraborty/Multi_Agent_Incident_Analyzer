@@ -26,8 +26,11 @@ def search_logs(service_name: str) -> str:
         "Content-Type": "application/json",
     }
 
+    # Production-grade sanitization: forces lowercase and replaces underscores with hyphens
+    clean_service = service_name.lower().replace("_", "-")
+
     # Groups by the exact error message to retain crucial context (e.g., lock timeouts)
-    query = f"['{axiom_dataset}'] | where _time > ago(15m) and service == '{service_name}' and level == 'ERROR' | summarize occurrences=count() by message"
+    query = f"['{axiom_dataset}'] | where _time > ago(15m) and service == '{clean_service}' and level == 'ERROR' | summarize occurrences=count() by message"
 
     try:
         response = requests.post(
@@ -119,11 +122,16 @@ def search_git_commits(table_name: str, target_repo: str) -> str:
     # Broaden the search to catch both standard JPA generics and @Table definitions
     entity_guess = "".join(word.capitalize() for word in re.split(r"[_|-]", table_name))
 
+    # Strip trailing 's' to handle standard pluralized table names
+    entity_singular = entity_guess.rstrip("s")
+
     try:
         # STEP 1: Locate the repository file
         url_search = "https://api.github.com/search/code"
         # Query looks for either the entity name or the raw table name in Java files
-        safe_query = f"repo:{target_repo} {entity_guess} OR {table_name} extension:java"
+        safe_query = (
+            f"repo:{target_repo} {entity_singular} OR {table_name} extension:java"
+        )
 
         time.sleep(2)  # Cooling period
         response_search = requests.get(

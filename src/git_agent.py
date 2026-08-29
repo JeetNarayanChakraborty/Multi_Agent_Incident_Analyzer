@@ -17,8 +17,8 @@ llm = ChatGoogleGenerativeAI(
 tool_available = [search_git_commits, dispatch_incident_report]
 
 # Define the System Prompt
-# This prompt is used to instruct the agent to perform scatter - gather
-# as well as looping through the tools to find the root cause of the incident
+# This prompt is used to instruct the code agent to perform codebase forensics and incident escalation effectively
+# and to ensure that the agent adheres to the rules of deterministic reasoning and avoids hallucination
 code_prompt = """
 You are the Code Analysis and Reporting Agent, specializing in codebase forensics and incident escalation.
 Your objective is to use the search_git_commits tool to locate offending pull requests and the dispatch_incident_report tool to publish the final Root Cause Analysis (RCA).

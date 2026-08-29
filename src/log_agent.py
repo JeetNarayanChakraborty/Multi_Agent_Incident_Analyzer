@@ -17,8 +17,8 @@ llm = ChatGoogleGenerativeAI(
 tool_available = [search_logs]
 
 # Define the System Prompt
-# This prompt is used to instruct the agent to perform scatter - gather
-# as well as looping through the tools to find the root cause of the incident
+# This prompt is used to instruct the agent on how to reason and investigate the logs effectively
+# and to ensure that the agent adheres to the rules of deterministic reasoning and avoids hallucination
 telemetry_prompt = """
 You are the Telemetry Analysis Agent, specializing in distributed system observability. 
 Your objective is to investigate application logs using the search_logs tool to identify latency spikes, error cascades, and anomalies.

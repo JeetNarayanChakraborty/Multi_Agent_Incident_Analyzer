@@ -17,8 +17,8 @@ llm = ChatGoogleGenerativeAI(
 tool_available = [query_database]
 
 # Define the System Prompt
-# This prompt is used to instruct the agent to perform scatter - gather
-# as well as looping through the tools to find the root cause of the incident
+# This prompt is used to instruct the database agent on how to reason and investigate the database effectively
+# and to ensure that the agent adheres to the rules of deterministic reasoning and avoids hallucination
 database_prompt = """
 You are the Database Investigation Agent, specializing in PostgreSQL performance troubleshooting and lock analysis.
 Your objective is to use the query_database tool to diagnose connection exhaustion, long-running queries, and blocked transactions.
