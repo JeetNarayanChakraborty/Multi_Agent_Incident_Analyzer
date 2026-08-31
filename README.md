@@ -1,6 +1,6 @@
 # Multi-Agent Incident Analyzer & Triage
 
-An autonomous, AI-driven Site Reliability Engineering (SRE) orchestrator that triages, investigates, and documents distributed microservice incidents — from the first alert down to the exact commit that caused the regression.
+An autonomous, AI orchestrator that triages, investigates, and documents distributed microservice incidents — from the first alert down to the exact commit that caused the regression.
 
 Built with **Python**, **LangGraph**, and **Google Gemini 3.7 Flash**, the system coordinates a Supervisor node with three specialized domain-expert agents to trace a failure from application telemetry → database locks → source code, and closes the loop by filing a Root Cause Analysis (RCA) directly as a GitHub Issue.
 
