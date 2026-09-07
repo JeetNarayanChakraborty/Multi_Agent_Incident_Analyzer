@@ -119,8 +119,13 @@ def search_git_commits(table_name: str, target_repo: str) -> str:
         "Accept": "application/vnd.github.v3+json",
     }
 
+    # Strip database schema prefixes (e.g., 'public.orders' -> 'orders')
+    clean_table = table_name.split(".")[-1]
+
     # Broaden the search to catch both standard JPA generics and @Table definitions
-    entity_guess = "".join(word.capitalize() for word in re.split(r"[_|-]", table_name))
+    entity_guess = "".join(
+        word.capitalize() for word in re.split(r"[_|-]", clean_table)
+    )
 
     # Strip trailing 's' to handle standard pluralized table names
     entity_singular = entity_guess.rstrip("s")
@@ -129,8 +134,10 @@ def search_git_commits(table_name: str, target_repo: str) -> str:
         # STEP 1: Locate the repository file
         url_search = "https://api.github.com/search/code"
         # Query looks for either the entity name or the raw table name in Java files
+
+        # Query searches for the singular class name (Order) or the raw table name (orders)
         safe_query = (
-            f"repo:{target_repo} {entity_singular} OR {table_name} extension:java"
+            f"repo:{target_repo} {entity_singular} OR {clean_table} extension:java"
         )
 
         time.sleep(2)  # Cooling period
